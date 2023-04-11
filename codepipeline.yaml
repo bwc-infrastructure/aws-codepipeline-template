@@ -38,12 +38,25 @@ Parameters:
     Type: String
   GitBranch:
     Type: String # The name of the branch e.g dev,stg, main
-  ChangeSetName:
+    Default: main
+  EventType:
     Type: String
+    AllowedValues:
+      - REPO_CREATED
+      - BRANCH_CREATED
 
 # Mappings: 
 
-# Conditions: 
+Conditions:
+  CreateECRReposity: !Equals
+    - !Ref EventType
+    - REPO_CREATED
+  CreateS3Bucket: !Equals
+    - !Ref EventType
+    - BRANCH_CREATED
+  CreateCodeBuildProject: !Equals
+    - !Ref EventType
+    - BRANCH_CREATED
 
 Resources: 
   ECRRepository:
@@ -54,6 +67,7 @@ Resources:
       ImageScanningConfiguration: 
         ScanOnPush: True
       RepositoryName: !Join ['-',[ecr,!Ref GitHubRepo]]
+    Condition: CreateECRReposity
   ECRRepositoryURL:
     Type: AWS::SSM::Parameter
     Properties:
@@ -65,10 +79,11 @@ Resources:
         Environment: DEV
         NetworkType: Private
         Project: !Join ['/',[!Ref GitHubOwner,!Ref GitHubRepo]]
+    Condition: CreateECRReposity
   CodeBuildProject:
     Type: 'AWS::CodeBuild::Project'
     Properties:
-      Name: !Join ['-',[cb,!Ref GitHubRepo]]
+      Name: !Join ['-',[!Ref GitHubRepo,!Ref GitHubBranch,cb]]
       Description: 'My CodeBuild project'
       ServiceRole: !Ref CodeBuildServiceRole
       Environment:
@@ -90,6 +105,7 @@ Resources:
         Type: 'CODEPIPELINE'
       Artifacts:
         Type: 'CODEPIPELINE'
+    Condition: CreateCodeBuildProject
   CodeBuildServiceRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -120,13 +136,13 @@ Resources:
             Action:
             - 'ecr:*'
             - 'ecr:GetAuthorizationToken'
-            Resource: '*'
-            
+            Resource: '*'  
+    Condition: CreateCloudBuildRole     
   ProjectS3Bucket:
     Type: AWS::S3::Bucket
     Properties: 
       AccessControl: Private 
-      BucketName: !Join ['-',[!Ref GitHubRepo,!Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      BucketName: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch,!Select [2, !Split ["/", !Ref AWS::StackId]]]]
   PipelineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -139,7 +155,7 @@ Resources:
         Version: '2012-10-17'
       Path: /
       Policies:
-      - PolicyName: CodePipelineAccess
+      - PolicyName: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch,'pipeline','role']]
         PolicyDocument:
           Version: '2012-10-17'
           Statement:
@@ -172,7 +188,7 @@ Resources:
         Version: '2012-10-17'
       Path: /
       Policies:
-      - PolicyName: CodePipelineAccess
+      - PolicyName: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch,'cft','policy']]
         PolicyDocument:
           Version: '2012-10-17'
           Statement:
