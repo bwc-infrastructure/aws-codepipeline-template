@@ -1,0 +1,257 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: A Generic AWS Codepipeline for CI/CD of ECS Service
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: GitHub configuration
+        Parameters:
+          - GitHubUsername
+          - GitHubOwner
+          - GitHubRepoName
+          - GitBranch
+      - Label:
+          default: AWS Solution configuration
+        Parameters:
+          - QSS3BucketName
+          - QSS3KeyPrefix
+    ParameterLabels:
+      GitHubUsername:
+        default: User name
+      GitHubOwner:
+        default: Repository owner
+      GitHubRepo:
+        default: Repository name
+      GitBranch:
+        default: Source branch name
+Parameters: 
+  GitHubUsername:
+    Type: String
+    Description: >-
+      GitHub user name to use as the continuous integration (CI) service account.
+  GitHubOwner: #The owner's name of the Github repository will be sent as an event to EventBridge from Github.
+    Description: The owner or organization for the GitHub project
+    Type: String
+  GitHubRepo: # The name of the Github repository will be sent as an event to EventBridge from Github.
+    Description: The owner or organization for the GitHub project
+    Type: String
+  GitBranch:
+    Type: String # The name of the branch e.g dev,stg, main
+  ChangeSetName:
+    Type: String
+
+# Mappings: 
+
+# Conditions: 
+
+Resources: 
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties: 
+      EncryptionConfiguration: 
+        EncryptionType: KMS
+      ImageScanningConfiguration: 
+        ScanOnPush: True
+      RepositoryName: !Join ['-',[ecr,!Ref GitHubRepo]]
+  ECRRepositoryURL:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Join ['-',[ecr,!Ref GitHubRepo]]
+      Type: String
+      Value: !GetAtt [ECRRepository,RepositoryUri]
+      Description: ECR URI 
+      Tags:
+        Environment: DEV
+        NetworkType: Private
+        Project: !Join ['/',[!Ref GitHubOwner,!Ref GitHubRepo]]
+  CodeBuildProject:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Join ['-',[cb,!Ref GitHubRepo]]
+      Description: 'My CodeBuild project'
+      ServiceRole: !Ref CodeBuildServiceRole
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/amazonlinux2-x86_64-standard:4.0'
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: 'AWS_ACCOUNTID'
+            Type: 'PLAINTEXT'
+            Value: !Ref 'AWS::AccountId'
+          - Name: 'Repository'
+            Type: 'PLAINTEXT'
+            Value: !Ref GitHubRepo
+          - Name: 'ECR_URI'
+            Type: 'PLAINTEXT'
+            Value: !GetAtt [ECRRepository, RepositoryUri]
+      Source:
+        Type: 'CODEPIPELINE'
+      Artifacts:
+        Type: 'CODEPIPELINE'
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: 'Allow'
+          Principal:
+            Service: 'codebuild.amazonaws.com'
+          Action:
+          - 'sts:AssumeRole'
+      Policies:
+      - PolicyName: 'CodeBuildServicePolicy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: 'Allow'
+            Action:
+            - 'logs:CreateLogGroup'
+            - 'logs:CreateLogStream'
+            - 'logs:PutLogEvents'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action:
+            - 's3:*'
+            Resource: !Join ['/',[!GetAtt [ProjectS3Bucket, Arn],'*']]
+          - Effect: 'Allow'
+            Action:
+            - 'ecr:*'
+            - 'ecr:GetAuthorizationToken'
+            Resource: '*'
+            
+  ProjectS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private 
+      BucketName: !Join ['-',[!Ref GitHubRepo,!Select [2, !Split ["/", !Ref AWS::StackId]]]]
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codepipeline.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+      - PolicyName: CodePipelineAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Action:
+              - 's3:*'
+              - 'cloudformation:CreateStack'
+              - 'cloudformation:DescribeStacks'
+              - 'cloudformation:DeleteStack'
+              - 'cloudformation:UpdateStack'
+              - 'cloudformation:CreateChangeSet'
+              - 'cloudformation:DeleteChangeSet'
+              - 'cloudformation:ExecuteChangeSet'
+              - 'cloudformation:DescribeChangeSet'
+              - 'cloudformation:SetStackPolicy'
+              - 'iam:PassRole'
+              - 'sns:Publish'
+              - 'codebuild:*'
+              - 'codestar-connections:*'
+              Effect: Allow
+              Resource: '*'
+  CFNRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [cloudformation.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+      - PolicyName: CodePipelineAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Action:
+              - 'ecr:*'
+              - 'codebuild:*'
+              Effect: Allow
+              Resource: '*'
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name:  !Join ['-',[!Ref GitHubOwner,!Ref GitHubRepo,codepipeline]]
+      RestartExecutionOnUpdate: False
+      RoleArn: !GetAtt [PipelineRole, Arn]
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ProjectS3Bucket
+      Stages: 
+        - Name: Source@Github
+          Actions:
+            - Name: AppSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: '{{resolve:ssm:github-connection-chandran-dev:1}}'
+                FullRepositoryId: !Join ['/',[!Ref GitHubOwner, !Ref GitHubRepo]]  #update it
+                BranchName: !Ref GitBranch
+              OutputArtifacts:
+                - Name: AppSource
+              RunOrder: '1'
+              Region: !Ref AWS::Region
+        - Name: Build@DockerImage
+          Actions:
+            - Name: BuildDocker
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                PrimarySource: AppSource
+                # EnvironmentVariables:
+              InputArtifacts: 
+                - Name: AppSource
+              RunOrder: '1' 
+        # - Name: Deploy@ECSPrerequisities
+        #   Actions:
+        #     - Name: CreateChangeset
+        #       ActionTypeId:
+        #         Category: Deploy
+        #         Owner: AWS
+        #         Provider: CloudFormation
+        #         Version: 1
+        #       Configuration:
+        #         ActionMode: CHANGE_SET_REPLACE
+        #         StackName: !Join ['-',[!Ref GitHubOwner,cft]]
+        #         ChangeSetName: !Join ["-" [!Ref GitHubOwner, !Ref GitHubRepo, Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        #         TemplateConfiguration: 'AppSource::parameters.json'
+        #         TemplatePath: 'AppSource::template.yml'
+        #         RoleArn: !GetAtt [CFNRole, Arn]
+        #       InputArtifacts:
+        #         - Name: AppSource
+        #       RunOrder: '1'
+        #     - Name: ExecuteChangeset
+        #       ActionTypeId:
+        #         Category: Deploy
+        #         Owner: AWS
+        #         Provider: CloudFormation
+        #         Version: 1
+        #       Configuration:
+        #         ActionMode: CHANGE_SET_EXECUTE
+        #         StackName: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch, cft]]
+        #         ChangeSetName: !Join ['-', [!Ref GitHubOwner, !Ref GitHubRepo, !Ref GitBranch, Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        #         OutputFileName: CreateStackOutput.json
+        #         RoleArn: !GetAtt [CFNRole, Arn]
+        #       InputArtifacts:
+        #         - Name: AppSource
+        #       RunOrder: '2'
