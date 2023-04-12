@@ -83,7 +83,7 @@ Resources:
   CodeBuildProject:
     Type: 'AWS::CodeBuild::Project'
     Properties:
-      Name: !Join ['-',[!Ref GitHubRepo,!Ref GitHubBranch,cb]]
+      Name: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch,cb]]
       Description: 'My CodeBuild project'
       ServiceRole: !Ref CodeBuildServiceRole
       Environment:
@@ -136,8 +136,7 @@ Resources:
             Action:
             - 'ecr:*'
             - 'ecr:GetAuthorizationToken'
-            Resource: '*'  
-    Condition: CreateCloudBuildRole     
+            Resource: '*'     
   ProjectS3Bucket:
     Type: AWS::S3::Bucket
     Properties: 
