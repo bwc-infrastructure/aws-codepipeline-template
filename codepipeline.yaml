@@ -11,11 +11,6 @@ Metadata:
           - GitHubOwner
           - GitHubRepoName
           - GitBranch
-      - Label:
-          default: AWS Solution configuration
-        Parameters:
-          - QSS3BucketName
-          - QSS3KeyPrefix
     ParameterLabels:
       GitHubUsername:
         default: User name
@@ -98,9 +93,6 @@ Resources:
           - Name: 'Repository'
             Type: 'PLAINTEXT'
             Value: !Ref GitHubRepo
-          - Name: 'ECR_URI'
-            Type: 'PLAINTEXT'
-            Value: !GetAtt [ECRRepository, RepositoryUri]
       Source:
         Type: 'CODEPIPELINE'
       Artifacts:
@@ -141,7 +133,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties: 
       AccessControl: Private 
-      BucketName: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch,!Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      BucketName: !Join ['-',[!Ref GitHubRepo,!Ref GitBranch,sto]]
   PipelineRole:
     Type: AWS::IAM::Role
     Properties:
